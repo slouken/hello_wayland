@@ -304,9 +304,7 @@ w_buffer_release(void *data, wo_fb_t *wofb)
 static void
 do_display_dmabuf(vid_out_env_t * const ve, AVFrame *const frame)
 {
-    const AVDRMFrameDescriptor *desc = frame->format == AV_PIX_FMT_DRM_PRIME ?
-        (AVDRMFrameDescriptor * ) frame->data[0] :
-        &((sw_dmabuf_t *)(frame->buf[0]->data))->desc;
+    const AVDRMFrameDescriptor *desc = get_frame_drm_descriptor(frame);
     const uint32_t format = desc->layers[0].format;
     const unsigned int width = frame_cropped_width(frame);
     const unsigned int height = frame_cropped_height(frame);
@@ -403,13 +401,28 @@ check_support_egl(window_ctx_t *const wc, const uint32_t fmt, const uint64_t mod
     return false;
 }
 
+const struct AVDRMFrameDescriptor *get_frame_drm_descriptor(struct AVFrame *const frame)
+{
+    return frame->format == AV_PIX_FMT_DRM_PRIME ?
+        (AVDRMFrameDescriptor * ) frame->data[0] :
+        &((sw_dmabuf_t *)(frame->buf[0]->data))->desc;
+}
+
+void
+add_frame_fence(vid_out_env_t * const ve, struct AVFrame *const frame)
+{
+    window_ctx_t *const wc = &ve->wc;
+    const AVDRMFrameDescriptor *desc = get_frame_drm_descriptor(frame);
+    struct dmabuf_w_env_s *const dbe = dmabuf_w_env_new(wc, frame->buf[0], desc->objects[0].fd);
+    dbe->pt = polltask_new(ve->vid_pq, desc->objects[0].fd, POLLOUT, dmabuf_fence_release_cb, dbe);
+    pollqueue_add_task(dbe->pt, -1);
+}
+
 static void
 do_display_egl(vid_out_env_t * const ve, AVFrame *const frame)
 {
     window_ctx_t *const wc = &ve->wc;
-    const AVDRMFrameDescriptor *desc = frame->format == AV_PIX_FMT_DRM_PRIME ?
-        (AVDRMFrameDescriptor * ) frame->data[0] :
-        &((sw_dmabuf_t *)(frame->buf[0]->data))->desc;
+    const AVDRMFrameDescriptor *desc = get_frame_drm_descriptor(frame);
     EGLint attribs[50];
     EGLint *a = attribs;
     int i, j;
@@ -505,11 +518,7 @@ do_display_egl(vid_out_env_t * const ve, AVFrame *const frame)
 
     // A fence is set on the fd by the egl render - we can reuse the buffer once it goes away
     // (same as the direct wayland output after buffer release)
-    {
-        struct dmabuf_w_env_s *const dbe = dmabuf_w_env_new(wc, frame->buf[0], desc->objects[0].fd);
-        dbe->pt = polltask_new(ve->vid_pq, desc->objects[0].fd, POLLOUT, dmabuf_fence_release_cb, dbe);
-        pollqueue_add_task(dbe->pt, -1);
-    }
+    add_frame_fence(ve, frame);
 
     // *** EGL plane resize missing - this is a cheat
     wo_surface_dst_pos_set(ve->vid, box_rect(ve->vid_par_num, ve->vid_par_den, ve->win_rect));
@@ -1058,6 +1067,33 @@ vid_out_env_t*
 dmabuf_wayland_out_new(unsigned int flags)
 {
     return wayland_out_new(false, flags);
+}
+
+vid_out_env_t*
+vidout_simple_new()
+{
+    vid_out_env_t *const ve = calloc(1, sizeof(*ve));
+
+    if ((ve->dbsc = dmabufs_ctl_new()) == NULL) {
+        LOG("%s: Failed to create dmbauf control\n", __func__);
+        goto fail;
+    }
+
+    if ((ve->dpool = dmabuf_pool_new_dmabufs(ve->dbsc, 32)) == NULL) {
+        LOG("%s: Failed to create dmbauf pool\n", __func__);
+        goto fail;
+    }
+
+    if ((ve->vid_pq = pollqueue_new()) == NULL) {
+        LOG("%s: Failed to create pollq\n", __func__);
+        goto fail;
+    }
+
+    return ve;
+
+fail:
+    vidout_wayland_delete(ve);
+    return NULL;
 }
 
 #if HAS_RUNTICKER
