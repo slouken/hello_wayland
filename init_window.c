@@ -729,6 +729,8 @@ do_egl_setup(vid_out_env_t *const vc)
         goto fail;
     }
 
+    eglSwapInterval(wc->egl_display, 0);
+
     LOG("GL Vendor: %s\n", glGetString(GL_VENDOR));
     LOG("GL Version: %s\n", glGetString(GL_VERSION));
     LOG("GL Renderer: %s\n", glGetString(GL_RENDERER));
