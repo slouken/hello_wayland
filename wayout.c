@@ -46,6 +46,7 @@ typedef struct subplane_s {
     struct wl_surface * surface;
     struct wl_subsurface * subsurface;
     struct wp_viewport * viewport;
+    bool external_surface;
 } subplane_t;
 
 #define WO_FB_PLANES 4
@@ -131,6 +132,7 @@ struct wo_env_s {
     atomic_int ref_count;
 
     struct wl_display *w_display;
+    bool external_display;
 
     struct pollqueue *pq;
     struct dmabufs_ctl *dbsc;
@@ -313,9 +315,11 @@ viewport_destroy(struct wp_viewport ** const ppviewport)
 static void
 plane_destroy(subplane_t * const spl)
 {
-    viewport_destroy(&spl->viewport);
+    if (!spl->external_surface)
+        viewport_destroy(&spl->viewport);
     subsurface_destroy(&spl->subsurface);
-    surface_destroy(&spl->surface);
+    if (!spl->external_surface)
+        surface_destroy(&spl->surface);
 }
 
 static int
@@ -328,6 +332,35 @@ plane_create(const wo_env_t * const woe, subplane_t * const plane,
         goto fail;
     if ((plane->viewport = wp_viewporter_get_viewport(woe->viewporter, plane->surface)) == NULL)
         goto fail;
+    if (parent == NULL)
+        return 0;
+    if ((plane->subsurface = wl_subcompositor_get_subsurface(woe->subcompositor, plane->surface, parent)) == NULL)
+        goto fail;
+
+    wl_subsurface_place_above(plane->subsurface, above);
+    if (sync)
+        wl_subsurface_set_sync(plane->subsurface);
+    else
+        wl_subsurface_set_desync(plane->subsurface);
+//    wl_surface_set_input_region(plane->surface, sys->region_none);
+    return 0;
+
+fail:
+    plane_destroy(plane);
+    return -1;
+}
+
+static int
+plane_create_from(const wo_env_t * const woe, subplane_t * const plane,
+             struct wl_surface * surface,
+             struct wp_viewport * viewport,
+             struct wl_surface * const parent,
+             struct wl_surface * const above,
+             const bool sync)
+{
+    plane->surface = surface;
+    plane->viewport = viewport;
+    plane->external_surface = true;
     if (parent == NULL)
         return 0;
     if ((plane->subsurface = wl_subcompositor_get_subsurface(woe->subcompositor, plane->surface, parent)) == NULL)
@@ -915,6 +948,43 @@ wo_make_surface_z(wo_window_t * wowin, const wo_surface_fns_t * fns, unsigned in
     return wos;
 }
 
+static wo_surface_t *
+wo_make_surface_from(wo_window_t * wowin, struct wl_surface *surface, struct wp_viewport *viewport, unsigned int zpos)
+{
+    wo_surface_t * const wos = calloc(1, sizeof(*wos));
+
+    if (wos == NULL)
+        return NULL;
+    wos->wowin = wo_window_ref(wowin);
+    wos->woe = wo_window_env(wowin);
+
+    pthread_mutex_lock(&wowin->surface_lock);
+    {
+        wo_surface_t * const win_surface = wowin->surface_chain;
+        wo_surface_t * n = win_surface;
+        wo_surface_t * p = NULL;
+        while (n != NULL && n->zpos <= zpos) {
+            p = n;
+            n = n->next;
+        }
+        wos->prev = p;
+        wos->next = n;
+        if (p == NULL)
+            wowin->surface_chain = wos;
+        else
+            p->next = wos;
+        if (n != NULL)
+            n->prev = wos;
+        plane_create_from(wos->woe, &wos->s, surface, viewport,
+                     win_surface != NULL ? win_surface->s.surface : NULL,  // Parent - all based off window surface
+                     p != NULL ? p->s.surface : win_surface != NULL ? win_surface->s.surface : NULL, // Above from Z
+                     false);
+        wos->parent = win_surface;
+    }
+    pthread_mutex_unlock(&wowin->surface_lock);
+    return wos;
+}
+
 const wo_surface_stats_t *
 wo_surface_stats_get(wo_surface_t * const wos)
 {
@@ -1181,6 +1251,21 @@ wo_window_size(const wo_window_t * const wowin)
     return wowin->pos;
 }
 
+void
+wo_window_set_size(wo_window_t * wowin, const wo_rect_t size)
+{
+    wo_surface_t *p;
+
+    wowin->pos = size;
+
+    pthread_mutex_lock(&wowin->surface_lock);
+    for (p = wowin->surface_chain; p != NULL; p = p->next) {
+        if (p->win_resize_fn)
+            p->win_resize_fn(p->win_resize_v, p, wowin->pos);
+    }
+    pthread_mutex_unlock(&wowin->surface_lock);
+}
+
 static void
 window_free(wo_window_t * const wowin)
 {
@@ -1273,6 +1358,31 @@ wo_window_new(wo_env_t * const woe, bool fullscreen, const wo_rect_t pos, const 
     // the attach which includes fullscreen if applied
     while (sem_wait(&wowin->sync_sem) == -1 && errno == EINTR)
         /* loop */;
+    return wowin;
+}
+
+// Creates a window from an existing surface and adds a black opaque buffer to it
+wo_window_t *
+wo_window_from(wo_env_t * const woe, struct wl_surface *surface, struct wp_viewport *viewport, const wo_rect_t pos)
+{
+    wo_window_t * const wowin = calloc(1, sizeof(*wowin));
+    wo_fb_t * wofb;
+
+    if (wowin == NULL)
+        return NULL;
+
+    wowin->woe = wo_env_ref(woe);
+    wowin->pos = pos;
+
+    // We have now setup enough that we can make a surface on ourselves
+    wowin->wos = wo_make_surface_from(wowin, surface, viewport, 0);
+    // Remove circular ref
+    surface_window_unref(wowin->wos);
+
+    wofb = wo_fb_new_rgba_pixel(woe, 0, 0, 0, UINT32_MAX);
+    wo_surface_attach_fb(wowin->wos, wofb, wowin->pos);
+    wo_fb_unref(&wofb);
+
     return wowin;
 }
 
@@ -1415,10 +1525,9 @@ global_registry_remover(void *data, struct wl_registry *registry, uint32_t id)
 }
 
 static int
-get_display_and_registry(wo_env_t *const woe)
+get_display_and_registry(wo_env_t *const woe, struct wl_display * display)
 {
 
-    struct wl_display *const display = wl_display_connect(NULL);
     struct wl_registry *registry = NULL;
 
     static const struct wl_registry_listener global_registry_listener = {
@@ -1427,8 +1536,14 @@ get_display_and_registry(wo_env_t *const woe)
     };
 
     if (display == NULL) {
-        LOG("Can't connect to wayland display !?\n");
-        return -1;
+        display = wl_display_connect(NULL);
+
+        if (display == NULL) {
+            LOG("Can't connect to wayland display !?\n");
+            return -1;
+        }
+    } else {
+        woe->external_display = true;
     }
 
     if ((registry = wl_display_get_registry(display)) == NULL) {
@@ -1596,7 +1711,8 @@ pollq_exit(void * v)
     if (woe->w_display != NULL) {
         wl_display_roundtrip(woe->w_display);
         wl_display_roundtrip(woe->w_display);
-        wl_display_disconnect(woe->w_display);
+        if (!woe->external_display)
+            wl_display_disconnect(woe->w_display);
     }
 
     dmabufs_ctl_unref(&woe->dbsc);
@@ -1656,8 +1772,8 @@ wo_env_finish(wo_env_t ** const ppWoe)
     sem_destroy(&finish_sem);
 }
 
-wo_env_t *
-wo_env_new_default(void)
+static wo_env_t *
+wo_env_new(struct wl_display *display)
 {
     wo_env_t * woe = calloc(1, sizeof(*woe));
 
@@ -1666,7 +1782,7 @@ wo_env_new_default(void)
 
     fmt_list_init(&woe->fmt_list, 16);
 
-    if (get_display_and_registry(woe) != 0)
+    if (get_display_and_registry(woe, display) != 0)
         goto fail;
 
     if (!woe->compositor) {
@@ -1707,5 +1823,17 @@ wo_env_new_default(void)
 fail:
     env_free(woe);
     return NULL;
+}
+
+wo_env_t *
+wo_env_new_default(void)
+{
+    return wo_env_new(NULL);
+}
+
+wo_env_t *
+wo_env_new_from(struct wl_display *display)
+{
+    return wo_env_new(display);
 }
 
