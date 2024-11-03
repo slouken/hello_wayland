@@ -2,6 +2,8 @@
 
 #include "libavutil/rational.h"
 
+#include "wayout.h"
+
 struct vid_out_env_s;
 typedef struct vid_out_env_s vid_out_env_t;
 
@@ -23,6 +25,8 @@ void add_frame_fence(vid_out_env_t * const ve, struct AVFrame *const frame);
 struct vid_out_env_s * vidout_wayland_new(unsigned int flags);
 struct vid_out_env_s * dmabuf_wayland_out_new(unsigned int flags);
 struct vid_out_env_s * vidout_simple_new();
+struct vid_out_env_s * vidout_wayland_new_from(struct wl_display *display, struct wl_surface *surface, struct wp_viewport *viewport, const wo_rect_t size);
+wo_window_t *vidout_wayland_get_window(vid_out_env_t * const ve);
 void vidout_wayland_delete(struct vid_out_env_s * dpo);
 
 void vidout_wayland_runticker(struct vid_out_env_s * dpo, const char * text);

@@ -20,7 +20,9 @@ typedef struct wo_env_s wo_env_t;
 
 struct dmabuf_h;
 struct wl_display;
+struct wl_surface;
 struct wl_egl_window;
+struct wp_viewport;
 
 typedef struct wo_rect_s {
     int32_t x, y;
@@ -127,7 +129,9 @@ struct wl_egl_window * wo_surface_egl_window_create(wo_surface_t * wsurf, const 
 
 // Window size, x,y zero - wayland doesn't admit position
 wo_rect_t wo_window_size(const wo_window_t * const wowin);
+void wo_window_set_size(wo_window_t * wowin, const wo_rect_t size);
 wo_window_t * wo_window_new(wo_env_t * const woe, bool fullscreen, const wo_rect_t pos, const char * const title);
+wo_window_t * wo_window_from(wo_env_t * const woe, struct wl_surface *surface, struct wp_viewport *viewport, const wo_rect_t pos);
 void wo_window_unref(wo_window_t ** const ppWowin);
 wo_window_t * wo_window_ref(wo_window_t * const wowin);
 wo_env_t * wo_window_env(const wo_window_t * wowin);
@@ -142,6 +146,7 @@ void wo_env_unref(wo_env_t ** const ppWoe);
 // with it before returning
 void wo_env_finish(wo_env_t ** const ppWoe);
 wo_env_t * wo_env_new_default(void);
+wo_env_t * wo_env_new_from(struct wl_display *display);
 
 #ifdef __cplusplus
 }

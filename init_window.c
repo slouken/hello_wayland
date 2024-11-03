@@ -1096,6 +1096,57 @@ fail:
     return NULL;
 }
 
+vid_out_env_t*
+vidout_wayland_new_from(struct wl_display *display, struct wl_surface *surface, struct wp_viewport *viewport, const wo_rect_t size)
+{
+    vid_out_env_t *const ve = calloc(1, sizeof(*ve));
+
+    if ((ve->dbsc = dmabufs_ctl_new()) == NULL) {
+        LOG("%s: Failed to create dmbauf control\n", __func__);
+        goto fail;
+    }
+
+    if ((ve->dpool = dmabuf_pool_new_dmabufs(ve->dbsc, 32)) == NULL) {
+        LOG("%s: Failed to create dmbauf pool\n", __func__);
+        goto fail;
+    }
+
+    if ((ve->vid_pq = pollqueue_new()) == NULL) {
+        LOG("%s: Failed to create pollq\n", __func__);
+        goto fail;
+    }
+
+    if ((ve->woe = wo_env_new_from(display)) == NULL) {
+        LOG("%s: Failed to create window environment\n", __func__);
+        goto fail;
+    }
+
+    if ((ve->win = wo_window_from(ve->woe, surface, viewport, size)) == NULL) {
+        LOG("%s: Failed to create window\n", __func__);
+        goto fail;
+    }
+
+    if ((ve->vid = wo_make_surface_z(ve->win, NULL, 10)) == NULL) {
+        LOG("%s: Failed to create window surface\n", __func__);
+        goto fail;
+    }
+    ve->win_rect = wo_window_size(ve->win);
+    wo_surface_dst_pos_set(ve->vid, ve->win_rect);
+
+    wo_surface_on_win_resize_set(ve->vid, vid_resize_dmabuf_cb, ve);
+
+    return ve;
+
+fail:
+    vidout_wayland_delete(ve);
+    return NULL;
+}
+
+wo_window_t *vidout_wayland_get_window(vid_out_env_t * const ve)
+{
+    return ve->win;
+}
+
 #if HAS_RUNTICKER
 void vidout_wayland_runticker(vid_out_env_t * ve, const char * text)
 {
