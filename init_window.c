@@ -911,7 +911,7 @@ vidout_wayland_delete(vid_out_env_t *vc)
     if (vc == NULL)
         return;
 
-    LOG("<<< %s\n", __func__);
+    //LOG("<<< %s\n", __func__);
 
 #if HAS_RUNCUBE
     runcube_way_stop(&vc->rce);
@@ -936,7 +936,7 @@ vidout_wayland_delete(vid_out_env_t *vc)
     dmabuf_pool_kill(&vc->dpool);
     dmabufs_ctl_unref(&vc->dbsc);
     free(vc);
-    LOG(">>> %s\n", __func__);
+    //LOG(">>> %s\n", __func__);
 }
 
 static void
@@ -953,7 +953,7 @@ wayland_out_new(const bool is_egl, const unsigned int flags)
 {
     vid_out_env_t *const ve = calloc(1, sizeof(*ve));
 
-    LOG("<<< %s\n", __func__);
+    //LOG("<<< %s\n", __func__);
 
     ve->is_egl = is_egl;
 
@@ -1003,7 +1003,7 @@ wayland_out_new(const bool is_egl, const unsigned int flags)
         }
     }
 
-    LOG(">>> %s\n", __func__);
+    //LOG(">>> %s\n", __func__);
 
     return ve;
 
