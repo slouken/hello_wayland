@@ -322,6 +322,15 @@ plane_destroy(subplane_t * const spl)
         surface_destroy(&spl->surface);
 }
 
+static void
+set_surface_ignore_input(const wo_env_t * const woe,
+                         struct wl_surface * const surface)
+{
+    struct wl_region * region = wl_compositor_create_region(woe->compositor);
+    wl_surface_set_input_region(surface, region);
+    wl_region_destroy(region);
+}
+
 static int
 plane_create(const wo_env_t * const woe, subplane_t * const plane,
              struct wl_surface * const parent,
@@ -342,7 +351,7 @@ plane_create(const wo_env_t * const woe, subplane_t * const plane,
         wl_subsurface_set_sync(plane->subsurface);
     else
         wl_subsurface_set_desync(plane->subsurface);
-//    wl_surface_set_input_region(plane->surface, sys->region_none);
+    set_surface_ignore_input(woe, plane->surface);
     return 0;
 
 fail:
@@ -371,7 +380,7 @@ plane_create_from(const wo_env_t * const woe, subplane_t * const plane,
         wl_subsurface_set_sync(plane->subsurface);
     else
         wl_subsurface_set_desync(plane->subsurface);
-//    wl_surface_set_input_region(plane->surface, sys->region_none);
+    set_surface_ignore_input(woe, plane->surface);
     return 0;
 
 fail:
